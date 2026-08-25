@@ -519,7 +519,7 @@ fun QuickCommunicationPanel() {
         }
         Button(
             onClick = {
-                val text = generatedMessage.ifBlank { message }
+                val text = message.trim()
                 textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, "mensaje_accesible")
                 generatedMessage = "Reproduciendo mensaje: $text"
             },
