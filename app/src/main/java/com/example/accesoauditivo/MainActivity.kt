@@ -67,12 +67,27 @@ data class AppUser(
     val supportNeed: String
 )
 
+data class SupportTool(
+    val name: String,
+    val description: String
+)
+
 enum class Screen {
     Login,
     Register,
     Recover,
     Home
 }
+
+private val PrimaryTeal = Color(0xFF0B6E69)
+private val PrimaryTealDark = Color(0xFF064B47)
+private val SoftTeal = Color(0xFFE4F2EF)
+private val SoftBlue = Color(0xFFEAF0FF)
+private val SoftAmber = Color(0xFFFFF4DF)
+private val AppCanvas = Color(0xFFF4F7F9)
+private val MutedText = Color(0xFF506070)
+private val ErrorRed = Color(0xFFB3261E)
+private val SuccessGreen = Color(0xFF176B4D)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -106,7 +121,7 @@ fun AccesoAuditivoApp() {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            color = Color(0xFFF5F7FB)
+            color = AppCanvas
         ) {
             when (screen) {
                 Screen.Login -> LoginScreen(
@@ -184,7 +199,7 @@ fun LoginScreen(
     AppFrame(title = "AccesoAuditivo", subtitle = "Comunicacion inclusiva para personas con discapacidad auditiva") {
         CardPanel {
             Text("Inicio de sesion", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("Usuario de prueba: ana@demo.cl / 1234", color = Color(0xFF506070))
+            Text("Usuario de prueba: ana@demo.cl / 1234", color = MutedText)
             Spacer(Modifier.height(16.dp))
 
             OutlinedTextField(
@@ -219,7 +234,7 @@ fun LoginScreen(
             }
 
             if (message.isNotBlank()) {
-                Text(message, color = Color(0xFFB3261E), fontWeight = FontWeight.SemiBold)
+                MessageBanner(text = message, isError = true)
             }
 
             Button(
@@ -360,7 +375,7 @@ fun RecoverScreen(
                 Text("Buscar cuenta")
             }
             if (result.isNotBlank()) {
-                Text(result, color = Color(0xFF176B4D), fontWeight = FontWeight.SemiBold)
+                MessageBanner(text = result, isError = result.startsWith("No"))
             }
             OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
                 Text("Volver")
@@ -376,12 +391,12 @@ fun HomeScreen(
     onLogout: () -> Unit
 ) {
     val tools = listOf(
-        "Texto rapido",
-        "Voz a texto",
-        "Alertas visuales",
-        "Subtitulos",
-        "Vibracion",
-        "Contactos"
+        SupportTool("Texto rapido", "Frases listas para mostrar"),
+        SupportTool("Voz a texto", "Apoyo para conversar"),
+        SupportTool("Alertas visuales", "Avisos destacados"),
+        SupportTool("Subtitulos", "Lectura de contenido"),
+        SupportTool("Vibracion", "Senales tactiles"),
+        SupportTool("Contactos", "Red de apoyo")
     )
 
     AppFrame(
@@ -398,7 +413,7 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(tools) { tool ->
-                    ToolTile(name = tool)
+                    ToolTile(tool = tool)
                 }
             }
         }
@@ -442,7 +457,7 @@ fun QuickCommunicationPanel() {
 
     LaunchedEffect(ttsReady) {
         if (ttsReady) {
-            textToSpeech.language = Locale("es", "CL")
+            textToSpeech.language = Locale.forLanguageTag("es-CL")
         }
     }
 
@@ -455,7 +470,11 @@ fun QuickCommunicationPanel() {
 
     CardPanel {
         Text("Comunicador rapido", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text("Herramienta para escribir o preparar un mensaje hablado/visual.", color = Color(0xFF506070))
+        Text("Herramienta para escribir o preparar un mensaje hablado/visual.", color = MutedText)
+        MessageBanner(
+            text = if (ttsReady) "Voz disponible en este dispositivo." else "Preparando motor de voz...",
+            isError = false
+        )
 
         OutlinedTextField(
             value = message,
@@ -543,13 +562,10 @@ fun QuickCommunicationPanel() {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        if (isUrgent) Color(0xFFFFE1DD) else Color(0xFFE4F2EF),
-                        RoundedCornerShape(8.dp)
-                    )
+                    .background(if (isUrgent) Color(0xFFFFE1DD) else SoftTeal, RoundedCornerShape(8.dp))
                     .border(
                         1.dp,
-                        if (isUrgent) Color(0xFFB3261E) else Color(0xFF0B6E69),
+                        if (isUrgent) ErrorRed else PrimaryTeal,
                         RoundedCornerShape(8.dp)
                     )
                     .padding(14.dp)
@@ -569,6 +585,35 @@ fun QuickCommunicationPanel() {
                 Text("Soporte")
             }
         }
+    }
+}
+
+@Composable
+fun MessageBanner(text: String, isError: Boolean) {
+    val background = if (isError) Color(0xFFFFE1DD) else SoftBlue
+    val border = if (isError) ErrorRed else Color(0xFF6C7FB7)
+    val foreground = if (isError) ErrorRed else Color(0xFF2D426E)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(background, RoundedCornerShape(8.dp))
+            .border(1.dp, border, RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text(text, color = foreground, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+fun StatusPill(text: String) {
+    Box(
+        modifier = Modifier
+            .background(SoftAmber, RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0xFFE6C170), RoundedCornerShape(8.dp))
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    ) {
+        Text(text, color = Color(0xFF5A4300), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -600,7 +645,9 @@ fun AppFrame(
             Spacer(Modifier.width(14.dp))
             Column {
                 Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text(subtitle, color = Color(0xFF506070))
+                Text(subtitle, color = MutedText)
+                Spacer(Modifier.height(6.dp))
+                StatusPill("Prototipo Android - Jetpack Compose")
             }
         }
         Spacer(Modifier.height(22.dp))
@@ -614,7 +661,7 @@ fun CardPanel(content: @Composable ColumnScope.() -> Unit) {
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
@@ -625,19 +672,22 @@ fun CardPanel(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-fun ToolTile(name: String) {
+fun ToolTile(tool: SupportTool) {
     Card(
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFE4F2EF))
+        colors = CardDefaults.cardColors(containerColor = SoftTeal),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(86.dp)
                 .padding(10.dp),
-            contentAlignment = Alignment.Center
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(name, fontWeight = FontWeight.SemiBold, color = Color(0xFF0B4F4A))
+            Text(tool.name, fontWeight = FontWeight.Bold, color = PrimaryTealDark)
+            Text(tool.description, color = MutedText, fontSize = 12.sp)
         }
     }
 }
@@ -690,7 +740,7 @@ fun ThreeColumnTableRow(first: String, second: String, third: String, isHeader: 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (isHeader) Color(0xFF0B6E69) else Color.Transparent)
+            .background(if (isHeader) PrimaryTeal else Color.Transparent)
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         Text(
