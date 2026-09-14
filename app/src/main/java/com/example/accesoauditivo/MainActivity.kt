@@ -1,6 +1,7 @@
 package com.example.accesoauditivo
 
 import android.os.Bundle
+import android.content.Context
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -44,7 +46,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -79,6 +82,64 @@ enum class Screen {
     Home
 }
 
+private fun String.normalizedEmail(): String = trim().lowercase(Locale.ROOT)
+
+internal fun String.hasEmailFormat(): Boolean {
+    val emailPattern = Regex("^[A-Za-z0-9+_.-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.)+[A-Za-z]{2,}$")
+    return emailPattern.matches(trim())
+}
+
+private fun String.hasMinimumPasswordLength(): Boolean = length >= 4
+
+private fun AppUser.matchesCredentials(email: String, password: String): Boolean {
+    return this.email.normalizedEmail() == email.normalizedEmail() && this.password == password
+}
+
+private fun List<AppUser>.findUser(match: (AppUser) -> Boolean): AppUser? = firstOrNull(match)
+
+private fun List<AppUser>.findByEmail(email: String): AppUser? {
+    return findUser { user -> user.email.normalizedEmail() == email.normalizedEmail() }
+}
+
+private fun List<AppUser>.filterBySupportNeed(supportNeed: String): List<AppUser> {
+    return filter { user -> user.supportNeed.equals(supportNeed, ignoreCase = true) }
+}
+
+internal fun validateRegistration(
+    name: String,
+    email: String,
+    password: String,
+    acceptTerms: Boolean,
+    isEmailRegistered: (String) -> Boolean
+): String {
+    return when {
+        name.isBlank() -> "Ingresa el nombre completo."
+        !email.hasEmailFormat() -> "Ingresa un correo electronico valido."
+        isEmailRegistered(email) -> "Este correo ya esta registrado."
+        !password.hasMinimumPasswordLength() -> "La contrasena debe tener al menos 4 caracteres."
+        !acceptTerms -> "Debes aceptar el uso de datos para crear la cuenta."
+        else -> ""
+    }
+}
+
+internal fun buildAccessibleMessage(
+    category: String,
+    outputMode: String,
+    message: String,
+    isUrgent: Boolean
+): String {
+    val prefix = if (isUrgent) "ALERTA VISUAL: " else ""
+    return "$prefix$category - $outputMode: ${message.trim()}"
+}
+
+private fun TextToSpeech.speakSafely(text: String): Boolean {
+    return try {
+        speak(text, TextToSpeech.QUEUE_FLUSH, null, "mensaje_accesible") != TextToSpeech.ERROR
+    } catch (exception: RuntimeException) {
+        false
+    }
+}
+
 private val PrimaryTeal = Color(0xFF0B6E69)
 private val PrimaryTealDark = Color(0xFF064B47)
 private val SoftTeal = Color(0xFFE4F2EF)
@@ -88,6 +149,14 @@ private val AppCanvas = Color(0xFFF4F7F9)
 private val MutedText = Color(0xFF506070)
 private val ErrorRed = Color(0xFFB3261E)
 private val SuccessGreen = Color(0xFF176B4D)
+
+// Guarda el array durante una recreacion de la actividad, por ejemplo al girar la pantalla.
+private val UsersSaver = listSaver<Array<AppUser>, String>(
+    save = { users -> users.flatMap { listOf(it.name, it.email, it.password, it.supportNeed) } },
+    restore = { values ->
+        values.chunked(4).map { AppUser(it[0], it[1], it[2], it[3]) }.toTypedArray()
+    }
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -103,15 +172,11 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AccesoAuditivoApp() {
-    val users = remember {
-        mutableStateListOf(
-            AppUser("Ana Silva", "ana@demo.cl", "1234", "Lectura labial"),
-            AppUser("Bruno Mora", "bruno@demo.cl", "abcd", "Texto a voz"),
-            AppUser("Camila Soto", "camila@demo.cl", "pass1", "Alertas visuales"),
-            AppUser("Diego Rojas", "diego@demo.cl", "demo2", "Subtitulos"),
-            AppUser("Elena Perez", "elena@demo.cl", "clave5", "Vibracion")
-        )
+    var registeredUsers by rememberSaveable(stateSaver = UsersSaver) {
+        mutableStateOf(emptyArray<AppUser>())
     }
+    val users = registeredUsers.toList()
+    var activeAccessMode by rememberSaveable { mutableStateOf("Texto") }
     var screen by remember { mutableStateOf(Screen.Login) }
     var activeUser by remember { mutableStateOf<AppUser?>(null) }
     var message by remember { mutableStateOf("") }
@@ -127,12 +192,11 @@ fun AccesoAuditivoApp() {
                 Screen.Login -> LoginScreen(
                     users = users,
                     message = message,
-                    onLogin = { email, password ->
-                        val found = users.firstOrNull {
-                            it.email.equals(email.trim(), ignoreCase = true) && it.password == password
-                        }
+                    onLogin = { email, password, mode ->
+                        val found = users.findUser { user -> user.matchesCredentials(email, password) }
                         if (found != null) {
                             activeUser = found
+                            activeAccessMode = mode
                             message = ""
                             screen = Screen.Home
                         } else {
@@ -150,12 +214,13 @@ fun AccesoAuditivoApp() {
                 )
 
                 Screen.Register -> RegisterScreen(
+                    users = users,
                     onBack = {
                         message = ""
                         screen = Screen.Login
                     },
                     onCreateUser = { user ->
-                        users.add(user)
+                        registeredUsers = registeredUsers + user
                         message = "Usuario registrado. Ahora puedes iniciar sesion."
                         screen = Screen.Login
                     }
@@ -172,6 +237,7 @@ fun AccesoAuditivoApp() {
                 Screen.Home -> HomeScreen(
                     activeUser = activeUser,
                     users = users,
+                    accessMode = activeAccessMode,
                     onLogout = {
                         activeUser = null
                         message = ""
@@ -187,19 +253,20 @@ fun AccesoAuditivoApp() {
 fun LoginScreen(
     users: List<AppUser>,
     message: String,
-    onLogin: (String, String) -> Unit,
+    onLogin: (String, String, String) -> Unit,
     onRegister: () -> Unit,
     onRecover: () -> Unit
 ) {
-    var email by remember { mutableStateOf("ana@demo.cl") }
-    var password by remember { mutableStateOf("1234") }
-    var rememberUser by remember { mutableStateOf(true) }
+    val context = LocalContext.current
+    val preferences = remember { context.getSharedPreferences("login", Context.MODE_PRIVATE) }
+    var email by rememberSaveable { mutableStateOf(preferences.getString("email", "") ?: "") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var rememberUser by rememberSaveable { mutableStateOf(preferences.contains("email")) }
     var accessMode by remember { mutableStateOf("Texto") }
 
     AppFrame(title = "AccesoAuditivo", subtitle = "Comunicacion inclusiva para personas con discapacidad auditiva") {
         CardPanel {
             Text("Inicio de sesion", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("Usuario de prueba: ana@demo.cl / 1234", color = MutedText)
             Spacer(Modifier.height(16.dp))
 
             OutlinedTextField(
@@ -221,7 +288,7 @@ fun LoginScreen(
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = rememberUser, onCheckedChange = { rememberUser = it })
-                Text("Recordar mis datos")
+                Text("Recordar mi correo")
             }
 
             Text("Modo de comunicacion preferido", fontWeight = FontWeight.SemiBold)
@@ -234,11 +301,16 @@ fun LoginScreen(
             }
 
             if (message.isNotBlank()) {
-                MessageBanner(text = message, isError = true)
+                MessageBanner(text = message, isError = message != "Usuario registrado. Ahora puedes iniciar sesion.")
             }
 
             Button(
-                onClick = { onLogin(email, password) },
+                onClick = {
+                    val editor = preferences.edit()
+                    if (rememberUser) editor.putString("email", email.trim()) else editor.remove("email")
+                    editor.apply()
+                    onLogin(email, password, accessMode)
+                },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Ingresar")
@@ -254,13 +326,13 @@ fun LoginScreen(
         }
 
         Spacer(Modifier.height(14.dp))
-        Text("Usuarios precargados en el arreglo", fontWeight = FontWeight.Bold)
-        CredentialTable(users = users.take(5))
+        Text("Usuarios registrados: ${users.size}", fontWeight = FontWeight.Bold)
     }
 }
 
 @Composable
 fun RegisterScreen(
+    users: List<AppUser>,
     onBack: () -> Unit,
     onCreateUser: (AppUser) -> Unit
 ) {
@@ -270,8 +342,8 @@ fun RegisterScreen(
     var acceptTerms by remember { mutableStateOf(false) }
     var supportNeed by remember { mutableStateOf("Texto a voz") }
     var menuOpen by remember { mutableStateOf(false) }
+    var formMessage by remember { mutableStateOf("") }
     val options = listOf("Texto a voz", "Alertas visuales", "Subtitulos", "Vibracion")
-    val canSubmit = name.isNotBlank() && email.isNotBlank() && password.length >= 4 && acceptTerms
 
     AppFrame(title = "Registro", subtitle = "Crea un perfil con preferencias de accesibilidad") {
         CardPanel {
@@ -321,18 +393,32 @@ fun RegisterScreen(
                 Text("Acepto el uso de mis datos para crear la cuenta")
             }
 
+            if (formMessage.isNotBlank()) {
+                MessageBanner(text = formMessage, isError = true)
+            }
+
             Button(
                 onClick = {
-                    onCreateUser(
-                        AppUser(
-                            name = name.trim(),
-                            email = email.trim(),
-                            password = password,
-                            supportNeed = supportNeed
-                        )
+                    val validationMessage = validateRegistration(
+                        name = name,
+                        email = email,
+                        password = password,
+                        acceptTerms = acceptTerms,
+                        isEmailRegistered = { candidateEmail -> users.findByEmail(candidateEmail) != null }
                     )
+                    if (validationMessage.isBlank()) {
+                        onCreateUser(
+                            AppUser(
+                                name = name.trim(),
+                                email = email.trim(),
+                                password = password,
+                                supportNeed = supportNeed
+                            )
+                        )
+                    } else {
+                        formMessage = validationMessage
+                    }
                 },
-                enabled = canSubmit,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Crear cuenta")
@@ -363,7 +449,7 @@ fun RecoverScreen(
             Spacer(Modifier.height(12.dp))
             Button(
                 onClick = {
-                    val found = users.firstOrNull { it.email.equals(email.trim(), ignoreCase = true) }
+                    val found = users.findByEmail(email)
                     result = if (found != null) {
                         "Cuenta encontrada. Pista temporal: ${found.password}"
                     } else {
@@ -388,8 +474,10 @@ fun RecoverScreen(
 fun HomeScreen(
     activeUser: AppUser?,
     users: List<AppUser>,
+    accessMode: String,
     onLogout: () -> Unit
 ) {
+    val textToVoiceUsers = users.filterBySupportNeed("Texto a voz")
     val tools = listOf(
         SupportTool("Texto rapido", "Frases listas para mostrar"),
         SupportTool("Voz a texto", "Apoyo para conversar"),
@@ -419,9 +507,10 @@ fun HomeScreen(
         }
 
         Spacer(Modifier.height(14.dp))
-        QuickCommunicationPanel()
+        QuickCommunicationPanel(initialVisualMode = accessMode == "Visual")
         Spacer(Modifier.height(14.dp))
         Text("Resumen de usuarios", fontWeight = FontWeight.Bold)
+        Text("Usuarios con apoyo Texto a voz: ${textToVoiceUsers.size}", color = MutedText, fontSize = 13.sp)
         SupportTable(users = users)
         Spacer(Modifier.height(14.dp))
         Button(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
@@ -431,18 +520,22 @@ fun HomeScreen(
 }
 
 @Composable
-fun QuickCommunicationPanel() {
+fun QuickCommunicationPanel(initialVisualMode: Boolean = false) {
     val context = LocalContext.current
     var message by remember { mutableStateOf("Necesito ayuda para comunicarme") }
     var outputMode by remember { mutableStateOf("Mostrar texto") }
-    var isUrgent by remember { mutableStateOf(false) }
+    var isUrgent by rememberSaveable { mutableStateOf(initialVisualMode) }
     var category by remember { mutableStateOf("Necesidad") }
     var menuOpen by remember { mutableStateOf(false) }
     var generatedMessage by remember { mutableStateOf("") }
     var ttsReady by remember { mutableStateOf(false) }
+    var ttsInitialized by remember { mutableStateOf(false) }
+    var ttsStatus by remember { mutableStateOf("Preparando motor de voz...") }
+    var helpTopic by remember { mutableStateOf<String?>(null) }
     val textToSpeech = remember {
         TextToSpeech(context) { status ->
-            ttsReady = status == TextToSpeech.SUCCESS
+            ttsInitialized = status == TextToSpeech.SUCCESS
+            if (!ttsInitialized) ttsStatus = "Motor de voz no disponible. Puedes mostrar el mensaje como texto."
         }
     }
     val categories = listOf("Necesidad", "Saludo", "Emergencia", "Transporte")
@@ -454,10 +547,17 @@ fun QuickCommunicationPanel() {
         "Tengo una emergencia",
         "Gracias por ayudar"
     )
+    val filteredPhrases = phrases.filter { phrase ->
+        category != "Emergencia" ||
+            phrase.contains("emergencia", ignoreCase = true) ||
+            phrase.contains("ayuda", ignoreCase = true)
+    }
 
-    LaunchedEffect(ttsReady) {
-        if (ttsReady) {
-            textToSpeech.language = Locale.forLanguageTag("es-CL")
+    LaunchedEffect(ttsInitialized) {
+        if (ttsInitialized) {
+            val languageResult = textToSpeech.setLanguage(Locale.forLanguageTag("es-CL"))
+            ttsReady = languageResult >= TextToSpeech.LANG_AVAILABLE
+            ttsStatus = if (ttsReady) "Voz en espanol disponible." else "Voz en espanol no disponible. Puedes mostrar el mensaje como texto."
         }
     }
 
@@ -472,7 +572,7 @@ fun QuickCommunicationPanel() {
         Text("Comunicador rapido", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Text("Herramienta para escribir o preparar un mensaje hablado/visual.", color = MutedText)
         MessageBanner(
-            text = if (ttsReady) "Voz disponible en este dispositivo." else "Preparando motor de voz...",
+            text = ttsStatus,
             isError = false
         )
 
@@ -522,16 +622,16 @@ fun QuickCommunicationPanel() {
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(phrases) { phrase ->
+            items(filteredPhrases) { phrase ->
                 PhraseTile(text = phrase, onClick = { message = phrase })
             }
         }
 
         Button(
             onClick = {
-                val prefix = if (isUrgent) "ALERTA VISUAL: " else ""
-                generatedMessage = "$prefix$category - $outputMode: $message"
+                generatedMessage = buildAccessibleMessage(category, outputMode, message, isUrgent)
             },
+            enabled = message.isNotBlank(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Generar mensaje")
@@ -539,8 +639,12 @@ fun QuickCommunicationPanel() {
         Button(
             onClick = {
                 val text = message.trim()
-                textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, "mensaje_accesible")
-                generatedMessage = "Reproduciendo mensaje: $text"
+                val didSpeak = textToSpeech.speakSafely(text)
+                generatedMessage = if (didSpeak) {
+                    "Reproduciendo mensaje: $text"
+                } else {
+                    "No se pudo reproducir el mensaje. Muestralo como texto: $text"
+                }
             },
             enabled = ttsReady && message.isNotBlank(),
             modifier = Modifier.fillMaxWidth()
@@ -578,13 +682,26 @@ fun QuickCommunicationPanel() {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            TextButton(onClick = { generatedMessage = "Vinculo informativo: Guia de accesibilidad auditiva" }) {
+            TextButton(onClick = { helpTopic = "Guia" }) {
                 Text("Guia")
             }
-            TextButton(onClick = { generatedMessage = "Vinculo de ayuda: Contacto de soporte" }) {
+            TextButton(onClick = { helpTopic = "Soporte" }) {
                 Text("Soporte")
             }
         }
+    }
+    if (helpTopic != null) {
+        AlertDialog(
+            onDismissRequest = { helpTopic = null },
+            title = { Text(helpTopic ?: "") },
+            text = {
+                Text(if (helpTopic == "Guia")
+                    "Escribe un mensaje o elige una frase. Generar mensaje lo muestra en pantalla; Reproducir mensaje lo lee en voz alta. La alerta visual destaca el texto en rojo."
+                else
+                    "Si no se escucha la voz, comprueba el volumen multimedia y el idioma del motor de texto a voz en los ajustes de Android. La comunicacion por texto sigue disponible. Las cuentas de esta actividad se mantienen durante la sesion; no hay recuperacion por correo ni servicio de soporte remoto.")
+            },
+            confirmButton = { TextButton(onClick = { helpTopic = null }) { Text("Cerrar") } }
+        )
     }
 }
 
